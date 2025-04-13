@@ -1,0 +1,226 @@
+import os
+import glob
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+
+# --- Symbole für die Terminalausgabe (mit ANSI-Farbcodes) ---
+GREEN_CHECK = "\033[92m✔\033[0m"
+RED_CROSS = "\033[91m✖\033[0m"
+YELLOW_EXCLAMATION = "\033[93m⚠\033[0m"
+
+# --- Konfiguration ---
+# Verzeichnis, in dem sich die Excel-Dateien befinden (bitte anpassen)
+input_dir = r'/Users/nico/Desktop/WHA/Daten/Spirodaten_bearbeitet'  # z.B. r'C:\Users\deinName\Documents\ExcelInput'
+
+# Alle Excel-Dateien im Verzeichnis finden
+files = glob.glob(os.path.join(input_dir, "*.xlsx"))
+
+# Ausgabe der gefundenen Dateien im Terminal
+if files:
+    print("Gefundene Dateien im Verzeichnis:")
+    for file in files:
+        print(f"  {YELLOW_EXCLAMATION} {file}")
+else:
+    print(f"{YELLOW_EXCLAMATION} Keine Dateien gefunden!")
+
+total_files = len(files)
+success_count = 0
+failed_files = []  # Hier werden die Dateien gespeichert, bei denen ein Fehler auftrat
+
+# Vollständiger, erwarteter Header (40 Spalten)
+complete_header = [
+    "t", "m", "s", "ms", "upm", "p", "af", "vt", "ve", "vo2", "vco2", "peto2", "petco2", "hf", "rer",
+    "af_int", "vt_int", "ve_int", "vo2_int", "vco2_int", "peto2_int", "petco2_int", "rer_int", "st",
+    "af_last30", "vt_last30", "ve_last30", "vo2_last30", "vco2_last30", "peto2_last30", "petco2_last30", "rer_last30",
+    "af_st_last30", "vt_st_last30", "ve_st_last30", "vo2_st_last30", "vco2_st_last30", "peto2_st_last30",
+    "petco2_st_last30", "rer_st_last30"
+]
+
+
+# Funktion zur Header-Prüfung und -Korrektur (nur für den Fall, dass noch nicht vollständig verarbeitet wurde)
+def pruefe_und_korrigiere_header(df):
+    """
+    Überprüft, ob die ersten vier Spaltennamen des DataFrames den Werten ['t', 'm', 's', 'ms'] entsprechen.
+    Falls nicht, werden die ersten vier Spaltennamen entsprechend angepasst.
+
+    Parameter:
+        df (pandas.DataFrame): Der zu überprüfende DataFrame.
+
+    Rückgabe:
+        pandas.DataFrame: Der DataFrame mit korrigiertem Header.
+    """
+    erwarteter_header = ['t', 'm', 's', 'ms']
+    aktueller_header = list(df.columns[:4])
+    if aktueller_header != erwarteter_header:
+        neue_spalten = erwarteter_header + list(df.columns[4:])
+        df.columns = neue_spalten
+    return df
+
+
+# Funktion zur Zuweisung der Zeitabschnitte (st) basierend auf t (in Sekunden)
+def assign_st(t):
+    if 0 <= t < 30:
+        return 0
+    elif 600 <= t < 630:
+        return 10
+    elif 1200 <= t < 1230:
+        return 20
+    elif 1320 <= t < 1350:
+        return 22
+    elif 1440 <= t < 1470:
+        return 24
+    elif 1560 <= t < 1590:
+        return 26
+    elif 1680 <= t < 1710:
+        return 28
+    elif 1800 <= t < 1830:
+        return 30
+    elif 1920 <= t < 1950:
+        return 32
+    elif 2100 <= t < 2130:
+        return 35
+    elif 2400 <= t < 2430:
+        return 40
+    elif 2700 <= t < 2730:
+        return 45
+    elif 3000 <= t < 3030:
+        return 50
+    else:
+        return np.nan
+
+
+# Liste der Variablen, die interpoliert werden sollen
+# (RER wird später als vco2/vo2 berechnet)
+interp_vars = ['af', 'vt', 've', 'vo2', 'vco2', 'peto2', 'petco2', 'rer']
+
+# Verarbeitung jeder Datei
+for file in files:
+    print(f"\nBearbeite Datei: {file}")
+    try:
+        # Einlesen der Excel-Datei (angenommen, dass die zu verarbeitenden Daten im ersten Sheet liegen)
+        df = pd.read_excel(file)
+
+        # Alle Spaltennamen in Kleinbuchstaben umwandeln, damit Groß-/Kleinschreibung ignoriert wird.
+        df.columns = df.columns.str.lower()
+
+        # Falls Spalten Sonderzeichen enthalten, diese anpassen:
+        # Beispielsweise "v'e" in "ve", "v'o2" in "vo2", "v'co2" in "vco2"
+        df.rename(columns={"v'e": "ve", "v'o2": "vo2", "v'co2": "vco2"}, inplace=True)
+
+        # Falls die Datei bereits den vollständigen Header besitzt, gilt sie als bereits verarbeitet.
+        if list(df.columns) == complete_header:
+            print(f"  {GREEN_CHECK} Datei bereits verarbeitet: {file}")
+            success_count += 1
+            continue
+
+        # Header-Prüfung und -Korrektur: Die ersten vier Spalten müssen 't', 'm', 's', 'ms' heißen.
+        df = pruefe_und_korrigiere_header(df)
+
+        # Ausgabe der aktuellen Spalten (zur Kontrolle)
+        print("Aktuelle Spalten:", df.columns.tolist())
+
+        # 1. Berechnung der Zeit in Sekunden: t = m * 60 + s (s wird gerundet)
+        df['t'] = df['m'] * 60 + df['s'].round()
+
+        # 2. Berechnung des RER: rer = vco2 / vo2
+        df['rer'] = df['vco2'] / df['vo2']
+
+        # 3. Erstellen einer kontinuierlichen Zeitreihe von 1 bis 3120 Sekunden
+        time_df = pd.DataFrame({'t': np.arange(1, 3121)})
+
+        # 4. Merge: Kontinuierliche Zeitreihe mit den Originaldaten (left join)
+        df_merged = pd.merge(time_df, df, on='t', how='left')
+
+        # 5. Lineare Interpolation der interessierenden Variablen, z. B. af_int, vt_int, etc.
+        for col in interp_vars:
+            df_merged[col + '_int'] = df_merged[col].interpolate(method='linear')
+
+        # 6. Rundung der Variablen analog zur SPSS-Formatierung:
+        #    t: keine Dezimalstellen; af, vt, ve, peto2, petco2: 1 Dezimalstelle; vo2, vco2, rer: 3 Dezimalstellen.
+        df_merged['t'] = df_merged['t'].round(0)
+        df_merged['af_int'] = df_merged['af_int'].round(1)
+        df_merged['vt_int'] = df_merged['vt_int'].round(1)
+        df_merged['ve_int'] = df_merged['ve_int'].round(1)
+        df_merged['peto2_int'] = df_merged['peto2_int'].round(1)
+        df_merged['petco2_int'] = df_merged['petco2_int'].round(1)
+        df_merged['vo2_int'] = df_merged['vo2_int'].round(3)
+        df_merged['vco2_int'] = df_merged['vco2_int'].round(3)
+        df_merged['rer_int'] = df_merged['rer_int'].round(3)
+
+        # 7. Zuweisung der Stufen (st) anhand der Zeit t
+        df_merged['st'] = df_merged['t'].apply(assign_st)
+
+        # 8. Aggregation: Berechnung des Mittelwerts der interpolierten Variablen pro Zeitabschnitt (st)
+        agg_dict = {col + '_int': 'mean' for col in interp_vars}
+        df_agg = df_merged.groupby('st', as_index=False).agg(agg_dict)
+        # Umbenennen der aggregierten Spalten in _last30
+        df_agg.rename(columns={
+            'af_int': 'af_last30',
+            'vt_int': 'vt_last30',
+            've_int': 've_last30',
+            'vo2_int': 'vo2_last30',
+            'vco2_int': 'vco2_last30',
+            'peto2_int': 'peto2_last30',
+            'petco2_int': 'petco2_last30',
+            'rer_int': 'rer_last30'
+        }, inplace=True)
+
+        # 9. Merge der Aggregationsergebnisse zurück in den kontinuierlichen Datensatz,
+        #    sodass in jeder Datensatzzeile, die zu einer Gruppe (st) gehört, die aggregierten Werte angehängt werden.
+        df_final = pd.merge(df_merged, df_agg, on='st', how='left')
+
+        # --- Neuer Spaltenblock: varname_st_last30 ---
+        # Für jede Variable wird der Block in der _last30-Spalte ausgewertet:
+        # In jedem Zeitabschnitt (definiert durch st) werden die vorhandenen, gleichlautenden Werte ermittelt.
+        # Für jede st-Gruppe wird dann in der neuen Spalte (z.B. af_st_last30) an der ersten Zeile der Gruppe der Wert eingetragen.
+        for var in interp_vars:
+            new_col_name = f"{var}_st_last30"
+            df_final[new_col_name] = np.nan  # Spalte initialisieren
+            # Gruppierung nach st: Für jede Gruppe erhält man den eindeutigen Wert
+            for st_value, group in df_final.groupby('st'):
+                # Überspringe Gruppen mit NaN als st (falls vorhanden)
+                if pd.isnull(st_value):
+                    continue
+                unique_value = group.iloc[0][f"{var}_last30"]
+                first_index = group.index[0]
+                df_final.loc[first_index, new_col_name] = unique_value
+
+        # 10. Überschreiben der Originaldatei: Es wird ein Sheet "Data" erstellt,
+        #     das alle transformierten Spalten (_int, _last30 und _st_last30) enthält.
+        with pd.ExcelWriter(file, engine='openpyxl', mode='w') as writer:
+            df_final.to_excel(writer, sheet_name="Data", index=False)
+
+        print(f"  {GREEN_CHECK} Datei erfolgreich bearbeitet: {file}")
+        success_count += 1
+    except Exception as e:
+        print(f"  {RED_CROSS} Fehler bei Datei {file}: {e}")
+        failed_files.append(file)
+
+# Berechnung des Prozentsatzes erfolgreicher Bearbeitungen
+if total_files > 0:
+    percentage = (success_count / total_files) * 100
+else:
+    percentage = 0
+
+print("\nZusammenfassung:")
+print(f"  Insgesamt gefundene Dateien: {total_files}")
+print(f"  Erfolgreich bearbeitete Dateien: {success_count}")
+print(f"  Anteil erfolgreich bearbeiteter Dateien: {percentage:.1f}%")
+
+# Ausgabe der Dateien, die nicht erfolgreich bearbeitet wurden
+if failed_files:
+    print(f"\n{RED_CROSS} Die folgenden Dateien konnten NICHT erfolgreich bearbeitet werden:")
+    for f in failed_files:
+        print(f"  {RED_CROSS} {f}")
+else:
+    print(f"\n{GREEN_CHECK} Alle Dateien wurden erfolgreich bearbeitet.")
+
+# Darstellung der Erfolgsquote als Diagramm (Tortendiagramm)
+labels = ["Erfolgreich", "Fehlgeschlagen"]
+sizes = [success_count, total_files - success_count]
+
+plt.figure()
+plt.pie(sizes, labels=labels, autopct='%1.1f%%', startangle=90)
+plt.title("Erfolgsquote")
+plt.show()
