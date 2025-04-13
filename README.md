@@ -16,4 +16,4 @@ Dieses Repository enthält ein Python-Skript zur automatisierten Verarbeitung un
 
 Dieses Skript wurde im Rahmen einer WHA entwickelt. Weitere Details finden sich in der Arbeit.
 
-"
+
