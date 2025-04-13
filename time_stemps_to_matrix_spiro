@@ -1,0 +1,164 @@
+import os
+import re
+import pandas as pd
+from openpyxl import load_workbook
+from openpyxl.styles import Alignment
+
+# Datei-Pfad zur bestehenden Tabelle, die beschrieben werden soll
+existing_file_path = "/Users/nico/Desktop/WHA/Daten/Spiro_all_var_timestemps_clean.xlsx"
+sheet_name_insert = "Tabelle1"
+
+# Ordner mit den Excel-Dateien
+input_folder = "/Users/nico/Desktop/WHA/Daten/Spirodaten_bearbeitet"
+
+# Mappings für die Variablennamen in den Dateien
+variable_mapping = {
+    "af": "af_st_last30",
+    "vt": "vt_st_last30",
+    "ve": "ve_st_last30",
+    "vo2": "vo2_st_last30",
+    "vco2": "vco2_st_last30",
+    "peto2": "peto2_st_last30",
+    "petco2": "petco2_st_last30",
+    "rer": "rer_st_last30",
+}
+
+# Liste der relevanten Excel-Dateien (nur CONST oder OSZ im Namen)
+dateien = [f for f in os.listdir(input_folder) if f.lower().endswith(".xlsx") and ("CONST" in f or "OSZ" in f)]
+
+# Bestehende Tabelle laden
+df_existing = pd.read_excel(existing_file_path, sheet_name=sheet_name_insert, engine="openpyxl")
+
+# Listen zur Fehlerprotokollierung
+fehlende_werte = []
+geänderte_werte = []
+
+
+# Funktion zur Konvertierung von Werten in Zahlen
+def convert_to_number(value):
+    if isinstance(value, str):
+        try:
+            return float(value.replace(",", "."))  # Ersetzt Komma durch Punkt, falls notwendig
+        except ValueError:
+            return None
+    return value if isinstance(value, (int, float)) else None
+
+
+# Verarbeiten aller Dateien
+for file in dateien:
+    file_path = os.path.join(input_folder, file)
+    file_base_name = os.path.splitext(file)[0]  # Dateiname ohne .xlsx
+
+    try:
+        print(f"\n🔍 Verarbeite Datei: {file}")
+        xls = pd.ExcelFile(file_path, engine="openpyxl")
+
+        # Identifikation der Probanden-ID und Testart aus dem Dateinamen
+        match = re.search(r'TTE(\d{3})_([A-Za-z]+\d+)', file_base_name)
+        if match:
+            proband_id = int(match.group(1))
+            testart_match = match.group(2).replace("CONST_", "CONST").replace("OSZ_", "OSZ")
+        else:
+            print(f"⚠️ Keine gültige ID oder Testart im Dateinamen: {file_base_name} gefunden!")
+            continue
+
+        if proband_id not in df_existing["ID"].values:
+            print(f"⚠️ Proband-ID {proband_id} nicht in bestehender Tabelle gefunden!")
+            continue
+
+        for sheet_name in xls.sheet_names:
+            df = pd.read_excel(xls, sheet_name=sheet_name, header=0)
+            df.columns = [str(col).strip() for col in df.columns]
+
+            # Iteration über die Spalten der bestehenden Tabelle
+            for existing_col in df_existing.columns:
+                if "_" not in existing_col:
+                    continue  # Überspringe nicht formatierte Spalten
+
+                parts = existing_col.split("_")
+                if len(parts) < 3:
+                    continue  # Sicherstellen, dass das Spaltenformat passt
+
+                header_testart, header_variable, header_zeitpunkt = parts[0], parts[1], parts[2]
+
+                if header_testart != testart_match:
+                    continue  # Testart stimmt nicht überein
+
+                if header_variable not in variable_mapping:
+                    continue  # Variable unbekannt
+
+                var_column = variable_mapping[header_variable]
+
+                if var_column not in df.columns:
+                    print(f"⚠️ Spalte {var_column} nicht in {file}, Sheet {sheet_name} gefunden!")
+                    fehlende_werte.append(f"{existing_col} (Datei: {file}, Sheet: {sheet_name})")
+                    continue
+
+                value_series = df[var_column].dropna().reset_index(drop=True)
+
+                # Ermittle den Zielzeitpunkt als float, z. B. 0.0, 0.2, … 12.0
+                try:
+                    zielzeitpunkt = float(header_zeitpunkt)
+                except ValueError:
+                    print(f"⚠️ Ungültiger Zeitwert {header_zeitpunkt} in Spaltennamen.")
+                    continue
+
+                if len(value_series) == 0:
+                    print(f"⚠️ Keine gültigen Werte für {var_column} in {file}, Sheet {sheet_name}.")
+                    fehlende_werte.append(f"{existing_col} (Datei: {file}, Sheet: {sheet_name})")
+                    continue
+
+                index = int((zielzeitpunkt / 12.0) * len(value_series))
+                index = min(index, len(value_series) - 1)  # Sicherstellen, dass der Index gültig ist
+
+                value = convert_to_number(value_series.iloc[index])
+
+                if value is not None:
+                    current_value = df_existing.loc[df_existing["ID"] == proband_id, existing_col].values[0]
+
+                    if pd.notna(current_value):  # Prüfen, ob bereits ein Wert existiert
+                        if current_value != value:
+                            print(
+                                f"⚠️ Wert {current_value} in {existing_col} stimmt nicht überein! Wird durch {value} ersetzt.")
+                            df_existing.loc[df_existing["ID"] == proband_id, existing_col] = value
+                            geänderte_werte.append(f"{existing_col} (alt: {current_value}, neu: {value})")
+                    else:
+                        df_existing.loc[df_existing["ID"] == proband_id, existing_col] = value
+
+                    print(f"✅ Wert für {existing_col} in ID {proband_id} eingetragen: {value}")
+
+    except Exception as e:
+        print(f"❌ Fehler beim Einlesen von {file}: {e}")
+
+# Ergebnisse speichern
+with pd.ExcelWriter(existing_file_path, engine="openpyxl", mode="w") as writer:
+    df_existing.to_excel(writer, sheet_name=sheet_name_insert, index=False)
+
+# Zahlenformat und Rechtsbündigkeit setzen
+wb = load_workbook(existing_file_path)
+ws = wb[sheet_name_insert]
+
+for row in ws.iter_rows(min_row=2, min_col=2):  # Ab der zweiten Zeile, zweite Spalte
+    for cell in row:
+        if isinstance(cell.value, (int, float)):
+            cell.alignment = Alignment(horizontal="right")
+
+wb.save(existing_file_path)
+
+# Zusammenfassung der fehlenden und geänderten Werte ausgeben
+print("\n🔍 Zusammenfassung der offenen Punkte:")
+if fehlende_werte:
+    print("⚠️ Fehlende Werte:")
+    for item in fehlende_werte:
+        print(f"   - {item}")
+else:
+    print("✅ Keine fehlenden Werte gefunden.")
+
+if geänderte_werte:
+    print("⚠️ Geänderte Werte:")
+    for item in geänderte_werte:
+        print(f"   - {item}")
+else:
+    print("✅ Keine Werte wurden überschrieben.")
+
+print(f"\n✅ Bestehende Tabelle aktualisiert und Zahlen rechtsbündig formatiert: {existing_file_path}")
