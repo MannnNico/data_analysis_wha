@@ -1,9 +1,9 @@
 # data_analysis_wha
-Automatisierte Verarbeitung und Integration von Blutgasanalysen (BGA) in eine Master-Tabelle mittels Python und Pandas.
+Automatisierte Verarbeitung und Integration von Blutgasanalysen (BGA) und Spiro Daten in eine Master-Tabelle mittels Python und Pandas.
 
 # Datenanalyse
 
-Dieses Repository enthält ein Python-Skript zur automatisierten Verarbeitung und Zusammenführung von Blutgasanalysen (BGA) aus mehreren Excel-Dateien.
+Dieses Repository enthält ein Python-Skript zur automatisierten Verarbeitung und Zusammenführung von Daten aus mehreren Excel-Dateien.
 
 ## Inhalt
 
